@@ -1,0 +1,204 @@
+name: 'Complete Version Release'
+description: 'Complete release workflow for monorepo projects using Mister.Version - calculates versions, creates tags, and generates reports'
+author: 'Mister.Version Team'
+
+branding:
+  icon: 'package'
+  color: 'green'
+
+inputs:
+  # Repository settings
+  repository-path:
+    description: 'Path to the Git repository root'
+    required: false
+    default: '.'
+  projects:
+    description: 'Glob pattern or comma-separated list of project files to process'
+    required: false
+    default: '**/*.csproj'
+  
+  # Version calculation
+  prerelease-type:
+    description: 'Type of prerelease (alpha, beta, rc, none)'
+    required: false
+    default: 'none'
+  tag-prefix:
+    description: 'Prefix for version tags'
+    required: false
+    default: 'v'
+  force-version:
+    description: 'Force a specific version for all projects'
+    required: false
+  
+  # Tag creation
+  create-tags:
+    description: 'Create git tags for the calculated versions'
+    required: false
+    default: 'true'
+  create-global-tags:
+    description: 'Create global tags for major releases'
+    required: false
+    default: 'false'
+  global-tag-strategy:
+    description: 'Strategy for global tags (major-only, all, none)'
+    required: false
+    default: 'major-only'
+  tag-message-template:
+    description: 'Template for tag messages (use {version}, {project}, {type} placeholders)'
+    required: false
+    default: 'Release {type} {version}'
+  sign-tags:
+    description: 'Sign tags with GPG (requires git config user.signingkey)'
+    required: false
+    default: 'false'
+  
+  # Report generation
+  generate-report:
+    description: 'Generate a version report'
+    required: false
+    default: 'true'
+  report-format:
+    description: 'Report output format (text, json, csv, markdown)'
+    required: false
+    default: 'markdown'
+  report-file:
+    description: 'File path to save the report'
+    required: false
+  post-report-to-pr:
+    description: 'Post the report as a PR comment (requires pull_request event)'
+    required: false
+    default: 'false'
+  
+  # Filtering options
+  include-test-projects:
+    description: 'Include test projects in processing'
+    required: false
+    default: 'false'
+  include-non-packable:
+    description: 'Include non-packable projects in processing'
+    required: false
+    default: 'false'
+  only-changed:
+    description: 'Only process projects with version changes'
+    required: false
+    default: 'true'
+  
+  # Behavior options
+  dry-run:
+    description: 'Show what would be done without making changes'
+    required: false
+    default: 'false'
+  fail-on-no-changes:
+    description: 'Fail if no version changes are detected'
+    required: false
+    default: 'false'
+  fail-on-existing-tags:
+    description: 'Fail if a tag already exists'
+    required: false
+    default: 'false'
+  
+  # GitHub integration
+  token:
+    description: 'GitHub token for PR comments and API access'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  # Version calculation outputs
+  projects:
+    description: 'JSON array of all analyzed projects with their versions'
+    value: ${{ steps.calculate.outputs.projects }}
+  changed-projects:
+    description: 'JSON array of projects with version changes'
+    value: ${{ steps.calculate.outputs.changed-projects }}
+  has-changes:
+    description: 'Whether any version changes were detected'
+    value: ${{ steps.calculate.outputs.has-changes }}
+  
+  # Tagging outputs
+  tags-created:
+    description: 'JSON array of tags that were created'
+    value: ${{ steps.tag.outputs.tags-created }}
+  tags-count:
+    description: 'Total number of tags created'
+    value: ${{ steps.tag.outputs.tags-count }}
+  
+  # Report outputs
+  report-content:
+    description: 'The generated report content'
+    value: ${{ steps.report.outputs.report-content }}
+  report-file:
+    description: 'Path to the generated report file'
+    value: ${{ steps.report.outputs.report-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Mister.Version
+      uses: mr-version/setup@main
+      with:
+        version: 'latest'
+    
+    - name: Calculate Versions
+      id: calculate
+      uses: mr-version/calculate@main
+      with:
+        projects: ${{ inputs.projects }}
+        repository-path: ${{ inputs.repository-path }}
+        prerelease-type: ${{ inputs.prerelease-type }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        force-version: ${{ inputs.force-version }}
+        output-format: 'json'
+        fail-on-no-changes: ${{ inputs.fail-on-no-changes }}
+    
+    - name: Create Tags
+      id: tag
+      if: ${{ inputs.create-tags == 'true' && steps.calculate.outputs.has-changes == 'true' }}
+      uses: mr-version/tag@main
+      with:
+        projects: ${{ inputs.projects }}
+        repository-path: ${{ inputs.repository-path }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        create-global-tags: ${{ inputs.create-global-tags }}
+        global-tag-strategy: ${{ inputs.global-tag-strategy }}
+        tag-message-template: ${{ inputs.tag-message-template }}
+        dry-run: ${{ inputs.dry-run }}
+        fail-on-existing: ${{ inputs.fail-on-existing-tags }}
+        include-test-projects: ${{ inputs.include-test-projects }}
+        include-non-packable: ${{ inputs.include-non-packable }}
+        only-changed: ${{ inputs.only-changed }}
+        sign-tags: ${{ inputs.sign-tags }}
+    
+    - name: Generate Report
+      id: report
+      if: ${{ inputs.generate-report == 'true' }}
+      uses: mr-version/report@main
+      with:
+        repository-path: ${{ inputs.repository-path }}
+        output-format: ${{ inputs.report-format }}
+        output-file: ${{ inputs.report-file }}
+        tag-prefix: ${{ inputs.tag-prefix }}
+        include-commits: 'true'
+        include-dependencies: 'true'
+        include-test-projects: ${{ inputs.include-test-projects }}
+        include-non-packable: ${{ inputs.include-non-packable }}
+        post-to-pr: ${{ inputs.post-report-to-pr }}
+        update-existing-comment: 'true'
+        comment-header: '## 🚀 Release Report'
+        token: ${{ inputs.token }}
+    
+    - name: Summary
+      shell: bash
+      run: |
+        echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Projects analyzed**: ${{ steps.calculate.outputs.projects && fromJson(steps.calculate.outputs.projects).length || 0 }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Projects with changes**: ${{ steps.calculate.outputs.changed-projects && fromJson(steps.calculate.outputs.changed-projects).length || 0 }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tags created**: ${{ steps.tag.outputs.tags-count || 0 }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Report generated**: ${{ inputs.generate-report }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Dry run mode**: ${{ inputs.dry-run }}" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 🧪 **Dry Run Mode** - No actual changes were made" >> $GITHUB_STEP_SUMMARY
+        fi
