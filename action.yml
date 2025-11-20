@@ -114,7 +114,21 @@ outputs:
   has-changes:
     description: 'Whether any version changes were detected'
     value: ${{ steps.calculate.outputs.has-changes }}
-  
+
+  # Validation outputs
+  has-validation-errors:
+    description: 'Whether any projects have validation errors'
+    value: ${{ steps.calculate.outputs.has-validation-errors }}
+  has-validation-warnings:
+    description: 'Whether any projects have validation warnings'
+    value: ${{ steps.calculate.outputs.has-validation-warnings }}
+  validation-errors-count:
+    description: 'Number of projects with validation errors'
+    value: ${{ steps.calculate.outputs.validation-errors-count }}
+  validation-warnings-count:
+    description: 'Number of projects with validation warnings'
+    value: ${{ steps.calculate.outputs.validation-warnings-count }}
+
   # Tagging outputs
   tags-created:
     description: 'JSON array of tags that were created'
@@ -122,7 +136,7 @@ outputs:
   tags-count:
     description: 'Total number of tags created'
     value: ${{ steps.tag.outputs.tags-count }}
-  
+
   # Report outputs
   report-content:
     description: 'The generated report content'
@@ -196,8 +210,16 @@ runs:
         echo "- **Projects with changes**: ${{ steps.calculate.outputs.changed-projects && fromJson(steps.calculate.outputs.changed-projects).length || 0 }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Tags created**: ${{ steps.tag.outputs.tags-count || 0 }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Report generated**: ${{ inputs.generate-report }}" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ steps.calculate.outputs.has-validation-errors }}" == "true" ]]; then
+          echo "- **Validation errors**: ❌ ${{ steps.calculate.outputs.validation-errors-count }} project(s)" >> $GITHUB_STEP_SUMMARY
+        fi
+        if [[ "${{ steps.calculate.outputs.has-validation-warnings }}" == "true" ]]; then
+          echo "- **Validation warnings**: ⚠️ ${{ steps.calculate.outputs.validation-warnings-count }} project(s)" >> $GITHUB_STEP_SUMMARY
+        fi
+
         echo "- **Dry run mode**: ${{ inputs.dry-run }}" >> $GITHUB_STEP_SUMMARY
-        
+
         if [[ "${{ inputs.dry-run }}" == "true" ]]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 🧪 **Dry Run Mode** - No actual changes were made" >> $GITHUB_STEP_SUMMARY
