@@ -9,11 +9,32 @@ This action combines version calculation, tag creation, and report generation in
 ## Usage
 
 ```yaml
-- uses: mr-version/release@v1
-  with:
-    create-tags: true
-    generate-report: true
+permissions:
+  contents: write  # the created tags are pushed to origin
+
+steps:
+  - uses: actions/checkout@v4
+    with:
+      fetch-depth: 0  # required: full history and tags (a shallow clone fails the release)
+
+  - uses: mr-version/release@v1
+    with:
+      create-tags: true
+      generate-report: true
 ```
+
+The tags are created from exactly the versions the calculate step produced (its `projects` output is passed
+to the tag step as `projects-json`), so `prerelease-type`, `force-version` and `config-file` apply to the tags
+too, and they are pushed to `origin` (`push-tags`, default `true`). Only the tags created by this run are
+pushed. Without `permissions: contents: write` the push, and therefore the release step, fails.
+
+> **Versioning of this action (TODO).** The sub-actions are referenced as `mr-version/setup@main`,
+> `mr-version/calculate@main`, `mr-version/tag@main` and `mr-version/report@main`, so `release@v1` follows
+> their `main` branches. Their `v1` tags still point at the initial check-in commits, which lack inputs and
+> outputs this action needs (`projects-json`, `push-tags`, `projects-count`, ...), so pinning to `@v1` today
+> would break the release. When cutting a release: move the `v1` tag of calculate, tag, report and setup to
+> their release commits, switch every `@main` in `action.yml` to `@v1` in one commit, and move this
+> repository's `v1` tag to that commit.
 
 ## Inputs
 
@@ -22,7 +43,7 @@ This action combines version calculation, tag creation, and report generation in
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `repository-path` | Path to the Git repository root | No | `.` |
-| `projects` | Glob pattern or comma-separated list of project files to process | No | `**/*.csproj` |
+| `projects` | Glob patterns or project file paths, separated by commas and/or newlines, relative to `repository-path`. The release fails when nothing matches | No | `**/*.csproj` |
 
 ### Version Calculation
 
@@ -31,6 +52,8 @@ This action combines version calculation, tag creation, and report generation in
 | `prerelease-type` | Type of prerelease (alpha, beta, rc, none) | No | `none` |
 | `tag-prefix` | Prefix for version tags | No | `v` |
 | `force-version` | Force a specific version for all projects | No | - |
+| `config-file` | Path to `mr-version.yml` (auto-detected in the repository root if not specified) | No | - |
+| `allow-shallow` | Calculate even if the repository is a shallow clone (otherwise the release fails) | No | `false` |
 
 ### Tag Creation
 
@@ -41,6 +64,7 @@ This action combines version calculation, tag creation, and report generation in
 | `global-tag-strategy` | Strategy for global tags (major-only, all, none) | No | `major-only` |
 | `tag-message-template` | Template for tag messages | No | `Release {type} {version}` |
 | `sign-tags` | Sign tags with GPG | No | `false` |
+| `push-tags` | Push the created tags to `origin` (requires `permissions: contents: write`) | No | `true` |
 
 ### Report Generation
 
@@ -55,8 +79,9 @@ This action combines version calculation, tag creation, and report generation in
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `only-changed` | Only process projects with version changes | No | `true` |
-| `include-all-projects` | Include all projects in the report (not just changed ones) | No | `false` |
+| `only-changed` | Only tag projects with version changes | No | `true` |
+| `include-test-projects` | Include test projects in the calculation, tags and report | No | `false` |
+| `include-non-packable` | Include non-packable projects in the tags and report | No | `false` |
 
 ### Behavior Options
 
@@ -81,6 +106,12 @@ This action combines version calculation, tag creation, and report generation in
 | `projects` | JSON array of all analyzed projects with their versions |
 | `changed-projects` | JSON array of projects with version changes |
 | `has-changes` | Whether any version changes were detected |
+| `projects-count` | Number of analyzed projects |
+| `changed-count` | Number of projects with version changes |
+| `has-validation-errors` | Whether any projects have validation errors |
+| `has-validation-warnings` | Whether any projects have validation warnings |
+| `validation-errors-count` | Number of projects with validation errors |
+| `validation-warnings-count` | Number of projects with validation warnings |
 
 ### Tagging Outputs
 
@@ -88,6 +119,7 @@ This action combines version calculation, tag creation, and report generation in
 |--------|-------------|
 | `tags-created` | JSON array of tags that were created |
 | `tags-count` | Total number of tags created |
+| `tags-pushed` | JSON array of the tag names pushed to `origin` |
 
 ### Report Outputs
 
@@ -105,6 +137,9 @@ name: Release
 on:
   push:
     branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -195,7 +230,6 @@ jobs:
         with:
           dry-run: true
           post-report-to-pr: true
-          comment-header: '## 🚀 Release Preview'
 ```
 
 ### Multi-Stage Release
@@ -283,7 +317,7 @@ jobs:
 This composite action internally uses:
 1. **Setup** - Installs Mister.Version CLI
 2. **Calculate** - Determines version changes
-3. **Tag** - Creates git tags (if enabled)
+3. **Tag** - Creates git tags for the calculated versions and pushes them (if enabled)
 4. **Report** - Generates version reports (if enabled)
 5. **Summary** - Creates GitHub Actions summary
 
@@ -334,9 +368,14 @@ jobs:
 - Check `fetch-depth: 0` is set
 - Verify project files are tracked
 
-### Tag Creation Fails
+### Shallow Clone Error
+- Use `actions/checkout` with `fetch-depth: 0`; a shallow clone would version every project as `0.1.0`
+- `allow-shallow: true` skips the check if you fetch history and tags yourself
+
+### Tag Creation or Push Fails
 - Check for existing tags with `fail-on-existing-tags: false`
-- Ensure push permissions for tags
+- Give the job `permissions: contents: write` and keep `actions/checkout`'s default `persist-credentials: true`
+- Set `push-tags: false` to create the tags without pushing them
 - Verify GPG configuration if signing
 
 ### Report Not Generated

@@ -13,7 +13,7 @@ inputs:
     required: false
     default: '.'
   projects:
-    description: 'Glob pattern or comma-separated list of project files to process'
+    description: 'Glob patterns or project file paths to process, separated by commas and/or newlines (relative to repository-path)'
     required: false
     default: '**/*.csproj'
   
@@ -29,6 +29,13 @@ inputs:
   force-version:
     description: 'Force a specific version for all projects'
     required: false
+  config-file:
+    description: 'Path to mr-version.yml configuration file (auto-detected if not specified)'
+    required: false
+  allow-shallow:
+    description: 'Calculate versions even if the repository is a shallow clone (by default a shallow clone fails; use actions/checkout with fetch-depth: 0)'
+    required: false
+    default: 'false'
   
   # Tag creation
   create-tags:
@@ -51,6 +58,10 @@ inputs:
     description: 'Sign tags with GPG (requires git config user.signingkey)'
     required: false
     default: 'false'
+  push-tags:
+    description: 'Push the created tags to origin (requires permissions: contents: write). Without pushing, the tags are lost with the runner.'
+    required: false
+    default: 'true'
   
   # Report generation
   generate-report:
@@ -114,6 +125,12 @@ outputs:
   has-changes:
     description: 'Whether any version changes were detected'
     value: ${{ steps.calculate.outputs.has-changes }}
+  projects-count:
+    description: 'Number of analyzed projects'
+    value: ${{ steps.calculate.outputs.projects-count }}
+  changed-count:
+    description: 'Number of projects with version changes'
+    value: ${{ steps.calculate.outputs.changed-count }}
 
   # Validation outputs
   has-validation-errors:
@@ -136,6 +153,9 @@ outputs:
   tags-count:
     description: 'Total number of tags created'
     value: ${{ steps.tag.outputs.tags-count }}
+  tags-pushed:
+    description: 'JSON array of the tag names pushed to origin'
+    value: ${{ steps.tag.outputs.tags-pushed }}
 
   # Report outputs
   report-content:
@@ -148,11 +168,15 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # TODO(pinning): the sub-actions are referenced by @main because their v1 tags still point at the
+    # initial check-in commits, which lack the inputs/outputs used below (projects-json, push-tags,
+    # projects-count, ...). Once calculate, tag, report and setup have moved v1 to a release commit,
+    # switch every reference below to @v1 together and move release's own v1 to that commit.
     - name: Setup Mister.Version
       uses: mr-version/setup@main
       with:
         version: 'latest'
-    
+
     - name: Calculate Versions
       id: calculate
       uses: mr-version/calculate@main
@@ -162,15 +186,19 @@ runs:
         prerelease-type: ${{ inputs.prerelease-type }}
         tag-prefix: ${{ inputs.tag-prefix }}
         force-version: ${{ inputs.force-version }}
+        config-file: ${{ inputs.config-file }}
+        include-test-projects: ${{ inputs.include-test-projects }}
+        allow-shallow: ${{ inputs.allow-shallow }}
         output-format: 'json'
         fail-on-no-changes: ${{ inputs.fail-on-no-changes }}
-    
+
+    # Tags exactly the versions calculated above (same prerelease type, config and forced version)
     - name: Create Tags
       id: tag
       if: ${{ inputs.create-tags == 'true' && steps.calculate.outputs.has-changes == 'true' }}
       uses: mr-version/tag@main
       with:
-        projects: ${{ inputs.projects }}
+        projects-json: ${{ steps.calculate.outputs.projects }}
         repository-path: ${{ inputs.repository-path }}
         tag-prefix: ${{ inputs.tag-prefix }}
         create-global-tags: ${{ inputs.create-global-tags }}
@@ -182,7 +210,8 @@ runs:
         include-non-packable: ${{ inputs.include-non-packable }}
         only-changed: ${{ inputs.only-changed }}
         sign-tags: ${{ inputs.sign-tags }}
-    
+        push-tags: ${{ inputs.push-tags }}
+
     - name: Generate Report
       id: report
       if: ${{ inputs.generate-report == 'true' }}
@@ -200,27 +229,41 @@ runs:
         update-existing-comment: 'true'
         comment-header: '## 🚀 Release Report'
         token: ${{ inputs.token }}
-    
+
     - name: Summary
+      if: ${{ !cancelled() }}
       shell: bash
+      env:
+        PROJECTS_COUNT: ${{ steps.calculate.outputs.projects-count }}
+        CHANGED_COUNT: ${{ steps.calculate.outputs.changed-count }}
+        TAGS_COUNT: ${{ steps.tag.outputs.tags-count }}
+        TAGS_PUSHED: ${{ steps.tag.outputs.tags-pushed }}
+        GENERATE_REPORT: ${{ inputs.generate-report }}
+        HAS_VALIDATION_ERRORS: ${{ steps.calculate.outputs.has-validation-errors }}
+        VALIDATION_ERRORS_COUNT: ${{ steps.calculate.outputs.validation-errors-count }}
+        HAS_VALIDATION_WARNINGS: ${{ steps.calculate.outputs.has-validation-warnings }}
+        VALIDATION_WARNINGS_COUNT: ${{ steps.calculate.outputs.validation-warnings-count }}
+        DRY_RUN: ${{ inputs.dry-run }}
       run: |
-        echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **Projects analyzed**: ${{ steps.calculate.outputs.projects && fromJson(steps.calculate.outputs.projects).length || 0 }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Projects with changes**: ${{ steps.calculate.outputs.changed-projects && fromJson(steps.calculate.outputs.changed-projects).length || 0 }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Tags created**: ${{ steps.tag.outputs.tags-count || 0 }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Report generated**: ${{ inputs.generate-report }}" >> $GITHUB_STEP_SUMMARY
-
-        if [[ "${{ steps.calculate.outputs.has-validation-errors }}" == "true" ]]; then
-          echo "- **Validation errors**: ❌ ${{ steps.calculate.outputs.validation-errors-count }} project(s)" >> $GITHUB_STEP_SUMMARY
-        fi
-        if [[ "${{ steps.calculate.outputs.has-validation-warnings }}" == "true" ]]; then
-          echo "- **Validation warnings**: ⚠️ ${{ steps.calculate.outputs.validation-warnings-count }} project(s)" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        echo "- **Dry run mode**: ${{ inputs.dry-run }}" >> $GITHUB_STEP_SUMMARY
-
-        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> 🧪 **Dry Run Mode** - No actual changes were made" >> $GITHUB_STEP_SUMMARY
-        fi
+        {
+          echo "## 🚀 Release Summary"
+          echo ""
+          echo "- **Projects analyzed**: ${PROJECTS_COUNT:-0}"
+          echo "- **Projects with changes**: ${CHANGED_COUNT:-0}"
+          echo "- **Tags created**: ${TAGS_COUNT:-0}"
+          if [[ -n "$TAGS_PUSHED" && "$TAGS_PUSHED" != "[]" ]]; then
+            echo "- **Tags pushed**: ${TAGS_PUSHED}"
+          fi
+          echo "- **Report generated**: ${GENERATE_REPORT}"
+          if [[ "$HAS_VALIDATION_ERRORS" == "true" ]]; then
+            echo "- **Validation errors**: ❌ ${VALIDATION_ERRORS_COUNT} project(s)"
+          fi
+          if [[ "$HAS_VALIDATION_WARNINGS" == "true" ]]; then
+            echo "- **Validation warnings**: ⚠️ ${VALIDATION_WARNINGS_COUNT} project(s)"
+          fi
+          echo "- **Dry run mode**: ${DRY_RUN}"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo ""
+            echo "> 🧪 **Dry Run Mode** - No actual changes were made"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
